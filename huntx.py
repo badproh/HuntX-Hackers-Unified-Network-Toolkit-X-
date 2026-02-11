@@ -182,8 +182,17 @@ def generate_complex_password(length, strength_level):
 class SimpleBaseModel:
     def __init__(self, **kwargs):
         self.__dict__.update(kwargs)
+    
+    # --- UPDATED: RECURSIVE SERIALIZATION ---
     def model_dump_json(self, indent=None):
-        return json.dumps(self.__dict__, indent=indent, default=str)
+        def recursive_default(o):
+            if isinstance(o, SimpleBaseModel):
+                return o.__dict__
+            if isinstance(o, (datetime, timezone)):
+                return o.isoformat()
+            return str(o)
+        
+        return json.dumps(self.__dict__, indent=indent, default=recursive_default)
 
 class AssetStatus(str, Enum):
     DISCOVERED = "discovered"
@@ -268,7 +277,8 @@ class SDB:
                 data['assets'] = assets
                 return StateDataBus(**data)
             except Exception as e:
-                print(f"[{time.strftime('%H:%M:%S')}] [SDB:ERROR] Checkpoint load failure: {e}. Starting new session.")
+                # print(f"[{time.strftime('%H:%M:%S')}] [SDB:ERROR] Checkpoint load failure: {e}. Starting new session.")
+                pass 
         
         print(f"[{time.strftime('%H:%M:%S')}] Starting new session.")
         return StateDataBus(target_root=target_root)
@@ -342,9 +352,7 @@ class ToolWrapper(abc.ABC):
 
             print(f"[{self.TOOL_NAME}] Executing: {' '.join(command)}")
             
-            # --- CRITICAL FIX: CAPTURE BOTH STDOUT AND STDERR ---
-            # Netcat verbose output (-v) typically goes to stderr, not stdout.
-            # We merge stderr into stdout so we can regex the result.
+            # --- CAPTURE BOTH STDOUT AND STDERR ---
             result = subprocess.run(
                 command, capture_output=True, text=True, check=True,
                 timeout=self.config.get('network', {}).get('timeouts', 300)
@@ -352,7 +360,6 @@ class ToolWrapper(abc.ABC):
             return result.stdout + "\n" + result.stderr 
             
         except subprocess.CalledProcessError as e:
-            # Netcat may return non-zero if connection fails, but still prints why to stderr
             if self.TOOL_NAME == "NETCAT":
                 return e.stdout + "\n" + e.stderr
             
@@ -597,7 +604,6 @@ class NetcatWrapper(ToolWrapper):
                     print(f"{RED}[{self.TOOL_NAME} ERROR] Port number must be between 1 and 65535.{RESET}")
                     return []
                 
-                # STORE TARGET INFO FOR USE IN NORMALIZE_OUTPUT
                 self.scan_ip = ip
                 self.scan_port = port_num
 
@@ -619,25 +625,19 @@ class NetcatWrapper(ToolWrapper):
     def _normalize_output(self, raw_output: str, sdb: StateDataBus) -> None:
         """Analyzes the netcat output to report connection status AND SAVE FINDING."""
         
-        # BROADER REGEX to catch 'succeeded' (Linux) or 'open' (BSD/Mac)
         success_pattern = r'(succeeded|open|connected)'
         
-        # Check if successful
         is_success = re.search(success_pattern, raw_output, re.IGNORECASE) is not None
         
         if is_success:
             result_status = f"{GREEN}Connection SUCCESSFUL (Port OPEN).{RESET}"
             
-            # --- CRITICAL: SAVE FINDING TO SDB ---
-            
-            # 1. Ensure the asset exists. If scanning a new IP, create it.
             if hasattr(self, 'scan_ip'):
                 if self.scan_ip not in sdb.assets:
                     print(f"[{self.TOOL_NAME}] New asset detected ({self.scan_ip}). Adding to database...")
                     new_asset = AssetObject(asset_key=self.scan_ip, ip_address=self.scan_ip, status=AssetStatus.SCANNED)
                     SDB.update_asset(sdb, new_asset)
                 
-                # 2. Create the Finding Object
                 finding = FindingObject(
                     tool_name=self.TOOL_NAME,
                     template_id="NC_CONNECTIVITY_SUCCESS",
@@ -647,7 +647,6 @@ class NetcatWrapper(ToolWrapper):
                     description=f"Netcat successfully established a connection to port {self.scan_port}."
                 )
                 
-                # 3. Add to Database
                 SDB.add_finding(sdb, self.scan_ip, finding)
                 print(f"[{self.TOOL_NAME}] {GREEN}Finding saved to SDB.{RESET}")
 
