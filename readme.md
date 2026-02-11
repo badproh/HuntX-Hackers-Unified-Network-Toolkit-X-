@@ -34,3 +34,20 @@ cd HuntX
 # 2. Run the installer (requires sudo for system tools)
 chmod +x install.sh
 sudo ./install.sh
+
+
+### Manual Installation (Optional)
+If you prefer not to use the installer script, you can set up the environment manually:
+
+# 1. **Install System Dependencies (Kali/Debian):**
+   ```bash
+   sudo apt update
+   sudo apt install nmap hydra wafw00f wireshark-common
+
+# 2. **Install Python Dependencies:**
+   ```bash
+   pip3 install -r requirements.txt
+   
+# 3.**Run HuntX:**
+   ```bash
+   python3 huntx.py
