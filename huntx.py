@@ -93,7 +93,7 @@ HUNTX_CONFIG = {
         "nmap": "cat",
         "nuclei": "echo",
         "hydra": "echo",
-        "netcat": "echo",
+        "netcat": "nc", # <-- UPDATED: Changed from 'echo' to 'nc' for real execution
         "metasploit": "echo",
         "burpsuite": "echo",
         "wireshark": "echo"
@@ -353,19 +353,26 @@ class ToolWrapper(abc.ABC):
                 return f"External tool launched: {' '.join(command)}"
 
             print(f"[{self.TOOL_NAME}] Executing: {' '.join(command)}")
+            # The check=True means it raises CalledProcessError on non-zero exit codes (like netcat failure)
             result = subprocess.run(
                 command, capture_output=True, text=True, check=True,
                 timeout=self.config.get('network', {}).get('timeouts', 300)
             )
             return result.stdout
         except subprocess.CalledProcessError as e:
+            # Handle non-zero exit codes here, especially for netcat where failure means port closed
+            # The actual output is often in e.stderr for verbose output (netcat -v)
+            if self.TOOL_NAME == "NETCAT":
+                # For netcat, a non-zero exit code often means connection failed, but we still need the output
+                return e.stdout + e.stderr
+            
             print(f"[{self.TOOL_NAME} ERROR] Execution failed: {e.stderr}")
             raise
         except subprocess.TimeoutExpired:
             print(f"[{self.TOOL_NAME} ERROR] Tool execution timed out.")
             raise
         except FileNotFoundError:
-            print(f"[{self.TOOL_NAME} ERROR] Tool binary not found at: {self.tool_binary_path}")
+            print(f"[{self.TOOL_NAME} ERROR] Tool binary not found at: {self.tool_binary_path}. Check HUNTX_CONFIG.{RESET}")
             raise
 
     @abc.abstractmethod
@@ -382,7 +389,11 @@ class ToolWrapper(abc.ABC):
             print(f"[{self.TOOL_NAME}] WARN: No targets found or command skipped. Moving on.")
             return 
         
-        raw_output = self._execute_tool(command)
+        try:
+            raw_output = self._execute_tool(command)
+        except Exception as e:
+            print(f"[{self.TOOL_NAME} CRITICAL ERROR] Tool failed to run: {e}")
+            return
         
         if self.TOOL_NAME not in ["BURPSUITE", "WIRESHARK"]:
             self._normalize_output(raw_output, sdb)
@@ -610,18 +621,60 @@ class HydraWrapper(ToolWrapper):
         else:
             print(f"[{self.TOOL_NAME}] Brute-force simulation finished: No weak credentials found (MOCK).")
 
-# ... (Rest of the wrapper classes remain the same)
 
 class NetcatWrapper(ToolWrapper):
     TOOL_NAME = "NETCAT"
+    
     def _build_command(self, target: str, sdb: StateDataBus) -> List[str]:
+        """Builds the real netcat command for a connectivity test (nc -z -v IP PORT)."""
         if ':' in target:
-            ip, port = target.split(':', 1)
-            return ["echo", f"Netcat initiated to {ip} on port {port} (Simulated connection test)..."]
-        return ["echo", f"Target format invalid. Use IP:PORT."]
+            try:
+                ip, port = target.split(':', 1)
+                # Ensure the port is an integer and within a valid range
+                port_num = int(port)
+                if not 1 <= port_num <= 65535:
+                    print(f"{RED}[{self.TOOL_NAME} ERROR] Port number must be between 1 and 65535.{RESET}")
+                    return []
+                
+                # The actual command structure: -z for scan, -v for verbose output, -w 1 for short timeout
+                return [
+                    self.tool_binary_path,  # Should be 'nc' or 'netcat' as configured
+                    "-z",  # Zero-I/O mode (scan for listening daemons only)
+                    "-v",  # Verbose output
+                    "-w", "1", # Timeout after 1 second
+                    ip, 
+                    str(port_num)
+                ]
+            except ValueError:
+                print(f"{RED}[{self.TOOL_NAME} ERROR] Invalid port number or target format.{RESET}")
+                return []
+        
+        print(f"{RED}[{self.TOOL_NAME} ERROR] Target format invalid. Use IP:PORT (e.g., 10.0.0.1:80).{RESET}")
+        return []
 
     def _normalize_output(self, raw_output: str, sdb: StateDataBus) -> None:
-        print(f"[{self.TOOL_NAME}] Netcat finished. Output: {raw_output.strip()}")
+        """Analyzes the netcat output to report connection status."""
+        
+        # Netcat output is often noisy, especially when run through subprocess.
+        # We look for common success indicators in the raw output.
+        # Note: 'succeeded' is a common output for successful connection.
+        success_pattern = r'Connection to .* port .* succeeded'
+        
+        if re.search(success_pattern, raw_output, re.IGNORECASE):
+            result_status = f"{GREEN}Connection SUCCESSFUL (Port OPEN).{RESET}"
+        elif "connection refused" in raw_output.lower() or "no route to host" in raw_output.lower() or "timeout" in raw_output.lower():
+            result_status = f"{YELLOW}Connection FAILED (Port CLOSED/Filtered/Timed out).{RESET}"
+        else:
+             # Fallback for unexpected but successful process execution
+             result_status = f"{CYAN}Connectivity test completed. Status unclear from verbose output.{RESET}"
+
+        print(f"[{self.TOOL_NAME}] Test finished. Result: {result_status}")
+        
+        # Display the verbose output from netcat
+        print(f"{DIM}--- Netcat Verbose Output ---{RESET}")
+        print(raw_output.strip())
+        print(f"{DIM}-----------------------------{RESET}")
+
 
 class BurpSuiteWrapper(ToolWrapper):
     TOOL_NAME = "BURPSUITE"
@@ -646,8 +699,8 @@ MODULE_REGISTRY: Dict[str, Type[ToolWrapper] | Callable[[Dict[str, Any]], ToolWr
     "bruteforce_sub": BruteForceSubdomainWrapper, 
     "port_scan": PortScanningWrapper,
     "osint_gather": OSINTWrapper,
-    "hydra": HydraWrapper, # <-- UPDATED
-    "netcat": NetcatWrapper,
+    "hydra": HydraWrapper, 
+    "netcat": NetcatWrapper, # <-- UPDATED
     "metasploit": MetasploitWrapper,
     "burpsuite": BurpSuiteWrapper,
     "wireshark": WiresharkWrapper,
@@ -817,9 +870,9 @@ def display_other_tools_menu():
     print("\n" + "="*5 + f" {BOLD}{RED}🔧 Vulnerability & Exploitation Tools {RESET}" + "="*5)
     print("Select a tool to launch directly:")
     print("-" * 40)
-    print(f"{BOLD}[1]{RESET}. {RED}SSH Brute-Force (Hydra Mock){RESET}") # <-- NEW ITEM
+    print(f"{BOLD}[1]{RESET}. {RED}SSH Brute-Force (Hydra Mock){RESET}") 
     print(f"{BOLD}[2]{RESET}. {CYAN}Other Brute-Force (Hydra, requires manual target){RESET}")
-    print(f"{BOLD}[3]{RESET}. {CYAN}Network Utility (Netcat, requires IP:PORT){RESET}")
+    print(f"{BOLD}[3]{RESET}. {CYAN}Network Utility (Netcat, requires IP:PORT){RESET}") # Real Netcat Test
     print(f"{BOLD}[4]{RESET}. {CYAN}Exploitation (Metasploit, requires target){RESET}")
     print(f"{BOLD}[5]{RESET}. {CYAN}GUI Proxy (BurpSuite Launch){RESET}")
     print(f"{BOLD}[6]{RESET}. {CYAN}GUI Sniffer (Wireshark Launch){RESET}")
@@ -835,7 +888,7 @@ def handle_other_tools_menu():
         tool_map = {
             '1': 'hydra', # SSH Brute-Force
             '2': 'hydra', # Generic Hydra
-            '3': 'netcat',
+            '3': 'netcat', # Real Netcat Test
             '4': 'metasploit',
             '5': 'burpsuite',
             '6': 'wireshark'
@@ -977,7 +1030,7 @@ def handle_password_utility():
         print(f"\nPassword Strength: {BOLD}{strength}{RESET}")
     else:
         print(f"\n{YELLOW}[INVALID INPUT] Invalid choice.{RESET}"); time.sleep(1); 
-        handle_password_utility()
+            handle_password_utility()
         return
         
     try: input(f"\n{YELLOW}{BOLD}Press ENTER to return to the password menu...{RESET}")
@@ -1018,7 +1071,7 @@ def handle_other_tools_menu():
         tool_map = {
             '1': 'hydra', # SSH Brute-Force
             '2': 'hydra', # Generic Hydra
-            '3': 'netcat',
+            '3': 'netcat', # Real Netcat Test
             '4': 'metasploit',
             '5': 'burpsuite',
             '6': 'wireshark'
