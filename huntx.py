@@ -33,57 +33,52 @@ CYAN = '\033[96m'
 BOLD = '\033[1m'
 DIM = '\033[2m'
 RESET = '\033[0m'
-
-# --- FIX: ADDED MISSING COLOR VARIABLE ---
 MAGENTA = '\033[95m' 
 
 TERMINAL_WIDTH = 80
 COLUMN_WIDTH = 38
 
-# --- Custom ASCII Map (Provided by User) ---
-HUNTX_MAP = f"""
-{BOLD}{CYAN}
+# --- Custom ASCII Map (Fixed: Raw String + Concatenation) ---
+# We use r""" for the art to ignore backslash escapes, and f-string for colors separately.
+HUNTX_MAP = f"{BOLD}{CYAN}" + r"""
 -----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----
            . _..::__:  ,-"-"._        |7       ,     _,.__
    _.___ _ _<_>`!(._`.`-.    /         _._     `_ ,_/  '  '-._.---.-.__
->.{{     " " `-==,',._\\{{  \  / {{)      / _ ">_,-' `                mt-2_
+>.{     " " `-==,',._\{  \  / {)      / _ ">_,-' `                mt-2_
   \_.:--.       `._ )`^-. "'       , [_/(                       __,/-'
  '"'     \         "    _L        oD_,--'                )     /. (|
-          |           ,'          _)_.\\\\._<> 6              _,' /  '
-          `.         /           [_/_'` `"(                <'}}  )
-           \\\\    .-. )           /   `-'"..' `:.#          _)  '
+          |           ,'          _)_.\\._<> 6              _,' /  '
+          `.         /           [_/_'` `"(                <'}  )
+           \\    .-. )           /   `-'"..' `:.#          _)  '
     `        \  (  `(           /         `:\  > \  ,-^.  /' '
-              `._,   ""         |           \\`'   \|   ?_){{  \\
+              `._,   ""         |           \`'   \|   ?_){  \
                  `=.---.        `._._       ,'     "`  |' ,- '.
                    |    `-._         |     /          `:`<_|h--._
-                   (        >        .     | ,          `=.__.`-'\\
-                    `.     /         |     |{{|              ,-.,\\     .
-                     |   ,'           \   / `'            ,"     \\
+                   (        >        .     | ,          `=.__.`-'\
+                    `.     /         |     |{|              ,-.,\     .
+                     |   ,'           \   / `'            ,"     \
                      |  /              |_'                |  __  /
-                     | |                                  '-'  `-'   \\.
+                     | |                                  '-'  `-'   \.
                      |/                                         "    /
-                     \\.                                             '
+                     \.                                             '
 
                       ,/            ______._.--._ _..---.---------._
      ,-----"-..?----_/ )      __,-'"             "                  (
 -.._(                  `-----'                                       `-
 -----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----
-{RESET}
-"""
+""" + f"{RESET}"
 
-# --- ASCII Art Banner (HuntX Logo) ---
-HUNTX_BANNER = f"""
-{BOLD}{GREEN}
-888   888 888     888 888b    888 88888888888 Y88b    d88P 
-888   888 888     888 8888b   888     888       Y88b d88P  
-888   888 888     888 88888b  888     888        Y88o88P   
-8888888888 888     888 888Y88b 888     888         Y888P    
-888   888 888     888 888 Y88b888     888         d888b    
-888   888 888     888 888  Y88888     888        d88888b   
-888   888 Y88b. .d88P 888   Y8888     888       d88P Y88b  
-888   888  "Y88888P"  888    Y888     888      d88P   Y88b
-{RESET}
-"""
+# --- ASCII Art Banner (Fixed: Raw String) ---
+HUNTX_BANNER = f"{BOLD}{GREEN}" + r"""
+888   888 888     888 888b    888 88888888888 Y88b    d88P 
+888   888 888     888 8888b   888     888       Y88b d88P  
+888   888 888     888 88888b  888     888        Y88o88P   
+8888888888 888     888 888Y88b 888     888         Y888P    
+888   888 888     888 888 Y88b888     888         d888b    
+888   888 888     888 888  Y88888     888        d88888b   
+888   888 Y88b. .d88P 888   Y8888     888       d88P Y88b  
+888   888  "Y88888P"  888    Y888     888      d88P   Y88b
+""" + f"{RESET}"
 
 # --- Configuration (EMBEDDED) ---
 HUNTX_CONFIG = {
@@ -93,7 +88,7 @@ HUNTX_CONFIG = {
         "nmap": "cat",
         "nuclei": "echo",
         "hydra": "echo",
-        "netcat": "nc", # <-- UPDATED: Changed from 'echo' to 'nc' for real execution
+        "netcat": "nc", 
         "metasploit": "echo",
         "burpsuite": "echo",
         "wireshark": "echo"
@@ -1030,7 +1025,7 @@ def handle_password_utility():
         print(f"\nPassword Strength: {BOLD}{strength}{RESET}")
     else:
         print(f"\n{YELLOW}[INVALID INPUT] Invalid choice.{RESET}"); time.sleep(1); 
-            handle_password_utility()
+        handle_password_utility()
         return
         
     try: input(f"\n{YELLOW}{BOLD}Press ENTER to return to the password menu...{RESET}")
