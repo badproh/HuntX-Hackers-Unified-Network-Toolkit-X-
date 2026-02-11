@@ -38,8 +38,7 @@ MAGENTA = '\033[95m'
 TERMINAL_WIDTH = 80
 COLUMN_WIDTH = 38
 
-# --- Custom ASCII Map (Fixed: Raw String + Concatenation) ---
-# We use r""" for the art to ignore backslash escapes, and f-string for colors separately.
+# --- Custom ASCII Map (Fixed: Raw String) ---
 HUNTX_MAP = f"{BOLD}{CYAN}" + r"""
 -----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----
            . _..::__:  ,-"-"._        |7       ,     _,.__
@@ -88,7 +87,7 @@ HUNTX_CONFIG = {
         "nmap": "cat",
         "nuclei": "echo",
         "hydra": "echo",
-        "netcat": "nc", 
+        "netcat": "nc", # Ensure 'nc' or 'ncat' is installed on your system
         "metasploit": "echo",
         "burpsuite": "echo",
         "wireshark": "echo"
@@ -142,35 +141,30 @@ def check_password_strength(password):
 def generate_complex_password(length, strength_level):
     """Generates a complex password based on length and a desired strength level."""
 
-    # 1. Define character pools 
     lower = string.ascii_lowercase
     upper = string.ascii_uppercase
     num = string.digits
     symbols = string.punctuation
     
-    # 2. Adjust character pools and minimum guarantee based on desired strength
-    
     all_chars = lower + upper + num + symbols
 
-    if strength_level == 4: # Very Strong
+    if strength_level == 4: 
         all_chars = all_chars + num + symbols 
         min_guarantee = 4
-    elif strength_level == 3: # Strong
+    elif strength_level == 3:
         all_chars = all_chars + symbols 
         min_guarantee = 4
-    elif strength_level == 2: # Moderate
+    elif strength_level == 2:
         min_guarantee = 4
-    else: # Weak / Very Weak (Default minimum complexity)
+    else: 
         min_guarantee = 2 
 
-    # 3. Guarantee character types based on strength
     guarantee = []
     guaranteed_types = [lower, upper, num, symbols]
     
     for i in range(min(min_guarantee, 4)):
         guarantee.append(random.choice(guaranteed_types[i]))
     
-    # 4. Determine and generate the remaining characters
     remaining_length = length - len(guarantee)
     
     if remaining_length < 0:
@@ -178,7 +172,6 @@ def generate_complex_password(length, strength_level):
         
     remaining_chars = random.choices(all_chars, k=remaining_length)
     
-    # 5. Combine and shuffle
     password_list = guarantee + remaining_chars
     random.shuffle(password_list)
     
@@ -332,7 +325,6 @@ class ToolWrapper(abc.ABC):
 
     def __init__(self, config: Dict[str, Any]):
         self.config = config
-        # Uses the embedded configuration dictionary
         self.tool_binary_path = config.get('tool_paths', {}).get(self.TOOL_NAME.lower(), self.TOOL_NAME.lower())
         self.direct_target = None 
 
@@ -348,17 +340,13 @@ class ToolWrapper(abc.ABC):
                 return f"External tool launched: {' '.join(command)}"
 
             print(f"[{self.TOOL_NAME}] Executing: {' '.join(command)}")
-            # The check=True means it raises CalledProcessError on non-zero exit codes (like netcat failure)
             result = subprocess.run(
                 command, capture_output=True, text=True, check=True,
                 timeout=self.config.get('network', {}).get('timeouts', 300)
             )
             return result.stdout
         except subprocess.CalledProcessError as e:
-            # Handle non-zero exit codes here, especially for netcat where failure means port closed
-            # The actual output is often in e.stderr for verbose output (netcat -v)
             if self.TOOL_NAME == "NETCAT":
-                # For netcat, a non-zero exit code often means connection failed, but we still need the output
                 return e.stdout + e.stderr
             
             print(f"[{self.TOOL_NAME} ERROR] Execution failed: {e.stderr}")
@@ -403,30 +391,23 @@ class SubdomainEnumerationWrapper(ToolWrapper):
     TOOL_NAME = "SUBDOMAIN_ENUM"
     
     def _build_command(self, target: str, sdb: StateDataBus) -> List[str]:
-        # 1. Simulate external tool output creation (Subfinder)
         self.output_file = f"/tmp/sub_enum_output_{sdb.session_id}.txt"
-        
-        # We simulate subfinder finding a large list of hosts and outputting them to a file
         mock_hosts = [
             target, f"www.{target}", f"api.{target}", f"mail.{target}", f"dev.{target}", 
             f"forgotten.{target}", f"internal-sso.{target}", f"client-portal.{target}"
         ]
         with open(self.output_file, 'w') as f:
             f.write('\n'.join(mock_hosts))
-        
-        # 2. The main command is to run 'host' on the root domain (to get the IP)
         return ["host", target] 
 
     def _normalize_output(self, raw_output: str, sdb: StateDataBus) -> None:
-        # 1. Get the Core IP Address (from 'host' output)
         ip_match = re.search(r'has address ([\d\.]+)', raw_output)
         ip_address = ip_match.group(1) if ip_match else None
         
-        # 2. Read the full list of subdomains from the simulated output file
         hostnames = []
         try:
             with open(self.output_file, 'r') as f:
-                hostnames = list(set(h.strip() for h in f.read().split() if h.strip())) # Keep unique non-empty hosts
+                hostnames = list(set(h.strip() for h in f.read().split() if h.strip()))
             os.remove(self.output_file)
         except FileNotFoundError:
             print(f"[{self.TOOL_NAME} WARN] Could not read mock output file.")
@@ -436,12 +417,12 @@ class SubdomainEnumerationWrapper(ToolWrapper):
         for hostname in hostnames:
             new_asset = AssetObject(asset_key=hostname, ip_address=ip_address)
             SDB.update_asset(sdb, new_asset)
-            print(f"{GREEN} [+] {hostname} ({ip_address}){RESET}") # Print the output here
+            print(f"{GREEN} [+] {hostname} ({ip_address}){RESET}") 
 
         print(f"[{self.TOOL_NAME}] Final list of {len(hostnames)} assets processed.")
 
 
-class BruteForceSubdomainWrapper(ToolWrapper): # <-- BRUTEFORCE WRAPPER
+class BruteForceSubdomainWrapper(ToolWrapper):
     TOOL_NAME = "BRUTEFORCE_SUB"
     
     def __init__(self, config: Dict[str, Any]):
@@ -454,7 +435,6 @@ class BruteForceSubdomainWrapper(ToolWrapper): # <-- BRUTEFORCE WRAPPER
         if not os.path.isfile(self.wordlist_local):
             print(f"[{self.TOOL_NAME}] Downloading wordlist from {self.wordlist_url}...")
             try:
-                # Use requests for download, respecting config timeouts
                 response = requests.get(self.wordlist_url, timeout=self.config.get('network', {}).get('timeouts', 300))
                 response.raise_for_status() 
                 with open(self.wordlist_local, 'wb') as f:
@@ -465,7 +445,6 @@ class BruteForceSubdomainWrapper(ToolWrapper): # <-- BRUTEFORCE WRAPPER
                 raise
 
     def _build_command(self, target: str, sdb: StateDataBus) -> List[str]:
-        # Command is just a placeholder echo, as the work is done in Python logic
         try:
             self._download_file()
             return ["echo", f"Starting brute-force scan for {target} using local Python logic..."]
@@ -474,7 +453,6 @@ class BruteForceSubdomainWrapper(ToolWrapper): # <-- BRUTEFORCE WRAPPER
     
     def _request_subdomain(self, subdomain: str) -> Optional[requests.Response]:
         try:
-            # Short timeout for simple connectivity check
             return requests.get("http://" + subdomain, timeout=3)
         except requests.exceptions.RequestException:
             return None 
@@ -494,7 +472,6 @@ class BruteForceSubdomainWrapper(ToolWrapper): # <-- BRUTEFORCE WRAPPER
                 word = line.strip()
                 test_url = word + "." + target_root
                 
-                # Check if asset is already discovered
                 if test_url in sdb.assets and sdb.assets[test_url].status in [AssetStatus.LIVE, AssetStatus.SCANNED]:
                      continue
 
@@ -504,7 +481,6 @@ class BruteForceSubdomainWrapper(ToolWrapper): # <-- BRUTEFORCE WRAPPER
                     discovered_url = "http://" + test_url
                     print(f"{GREEN} [+] {discovered_url} ({response.status_code}){RESET}")
 
-                    # Update SDB
                     new_asset = AssetObject(asset_key=test_url, url=discovered_url, is_web=True, status=AssetStatus.LIVE)
                     SDB.update_asset(sdb, new_asset)
                     
@@ -530,7 +506,6 @@ class PortScanningWrapper(ToolWrapper):
         for asset_key, asset in sdb.assets.items():
             if asset.status != AssetStatus.DEAD:
                 asset.status = AssetStatus.SCANNED
-                # Mock ports: root/critical assets get more ports, others get just web
                 if asset_key in [sdb.target_root, f"www.{sdb.target_root}", f"api.{sdb.target_root}"]:
                     asset.ports = [PortDetail(22, 'tcp', 'ssh'), PortDetail(443, 'tcp', 'https', version="nginx/1.20")]
                 else:
@@ -553,7 +528,6 @@ class MetasploitWrapper(ToolWrapper):
         target_asset = sdb.assets.get(target)
         if target_asset and any(p.port_number == 445 for p in target_asset.ports):
              return ["echo", f"Launching MSF exploit against {target} (port 445 open)..."]
-        
         return ["echo", f"No common exploit vector found for {target}. Aborting mock exploit."]
 
     def _normalize_output(self, raw_output: str, sdb: StateDataBus) -> None:
@@ -563,7 +537,6 @@ class HydraWrapper(ToolWrapper):
     TOOL_NAME = "HYDRA"
     
     def _build_command(self, target: str, sdb: StateDataBus) -> List[str]:
-        # If target is NONE, try to find an SSH-enabled asset in SDB
         if target == "NONE":
             ssh_asset = next((a for a in sdb.assets.values() if any(p.service == 'ssh' and p.state == 'open' for p in a.ports)), None)
             target = ssh_asset.asset_key if ssh_asset else None
@@ -572,28 +545,18 @@ class HydraWrapper(ToolWrapper):
             print(f"[{self.TOOL_NAME} WARN] No suitable target or asset with open SSH (port 22) found in SDB for Hydra.")
             return []
         
-        # We use the configured wordlist paths (mocked)
         userlist = self.config.get('wordlists', {}).get('usernames', 'users.txt')
         passlist = self.config.get('wordlists', {}).get('passwords', 'passwords.txt')
         
-        # Simulate the actual Hydra command construction
-        self.simulated_command = [
-            "hydra",
-            "-L", userlist,
-            "-P", passlist,
-            target,
-            "ssh"
-        ]
-        
+        self.simulated_command = ["hydra", "-L", userlist, "-P", passlist, target, "ssh"]
         return ["echo", f"Simulating SSH Brute-force on {target} using Hydra..."]
 
     def _normalize_output(self, raw_output: str, sdb: StateDataBus) -> None:
         print(f"[{self.TOOL_NAME}] Brute-force simulation started. Output: {raw_output.strip()}")
         
-        target_key = sdb.target_root # Default to root target
+        target_key = sdb.target_root 
 
-        # MOCK SUCCESS SCENARIO: 
-        if random.choice([True, False, False]): # 1 in 3 chance of success for demonstration
+        if random.choice([True, False, False]): 
             user = random.choice(["root", "admin", "testuser"])
             password = random.choice(["password123", "default", "p@ssw0rd"])
             
@@ -602,15 +565,12 @@ class HydraWrapper(ToolWrapper):
                 tool_name=self.TOOL_NAME,
                 template_id="SSH_WEAK_CREDS",
                 name="SSH Weak Credential Found via Brute-Force",
-                severity=FindingSeverity.CRITICAL, # High severity finding
+                severity=FindingSeverity.CRITICAL, 
                 proof=mock_proof,
                 description=f"Hydra simulated a successful login to SSH on {target_key} using common or weak credentials."
             )
             
-            # Use the target from the command, or the SDB root if target was NONE and no SSH asset was found (less accurate)
-            # For simplicity, if target was NONE, we'll try to use the asset that has port 22 open (if found in _build_command)
-            target_for_finding = self.simulated_command[4] if len(self.simulated_command) > 4 else sdb.target_root
-
+            target_for_finding = self.simulated_command[4] if hasattr(self, 'simulated_command') and len(self.simulated_command) > 4 else sdb.target_root
             SDB.add_finding(sdb, target_for_finding, mock_finding)
             print(f"\n{BOLD}{RED}!! CRITICAL FINDING LOGGED: SSH Weak Credentials ({user}:{password}) !!{RESET}")
         else:
@@ -625,18 +585,20 @@ class NetcatWrapper(ToolWrapper):
         if ':' in target:
             try:
                 ip, port = target.split(':', 1)
-                # Ensure the port is an integer and within a valid range
                 port_num = int(port)
                 if not 1 <= port_num <= 65535:
                     print(f"{RED}[{self.TOOL_NAME} ERROR] Port number must be between 1 and 65535.{RESET}")
                     return []
                 
-                # The actual command structure: -z for scan, -v for verbose output, -w 1 for short timeout
+                # STORE TARGET INFO FOR USE IN NORMALIZE_OUTPUT
+                self.scan_ip = ip
+                self.scan_port = port_num
+
                 return [
-                    self.tool_binary_path,  # Should be 'nc' or 'netcat' as configured
-                    "-z",  # Zero-I/O mode (scan for listening daemons only)
-                    "-v",  # Verbose output
-                    "-w", "1", # Timeout after 1 second
+                    self.tool_binary_path, 
+                    "-z", 
+                    "-v", 
+                    "-w", "1", 
                     ip, 
                     str(port_num)
                 ]
@@ -648,24 +610,46 @@ class NetcatWrapper(ToolWrapper):
         return []
 
     def _normalize_output(self, raw_output: str, sdb: StateDataBus) -> None:
-        """Analyzes the netcat output to report connection status."""
+        """Analyzes the netcat output to report connection status AND SAVE FINDING."""
         
-        # Netcat output is often noisy, especially when run through subprocess.
-        # We look for common success indicators in the raw output.
-        # Note: 'succeeded' is a common output for successful connection.
         success_pattern = r'Connection to .* port .* succeeded'
         
-        if re.search(success_pattern, raw_output, re.IGNORECASE):
+        # Check if successful
+        is_success = re.search(success_pattern, raw_output, re.IGNORECASE) is not None
+        
+        if is_success:
             result_status = f"{GREEN}Connection SUCCESSFUL (Port OPEN).{RESET}"
+            
+            # --- CRITICAL: SAVE FINDING TO SDB ---
+            
+            # 1. Ensure the asset exists. If scanning a new IP, create it.
+            if hasattr(self, 'scan_ip'):
+                if self.scan_ip not in sdb.assets:
+                    print(f"[{self.TOOL_NAME}] New asset detected ({self.scan_ip}). Adding to database...")
+                    new_asset = AssetObject(asset_key=self.scan_ip, ip_address=self.scan_ip, status=AssetStatus.SCANNED)
+                    SDB.update_asset(sdb, new_asset)
+                
+                # 2. Create the Finding Object
+                finding = FindingObject(
+                    tool_name=self.TOOL_NAME,
+                    template_id="NC_CONNECTIVITY_SUCCESS",
+                    name=f"Port {self.scan_port} Reachable (Open)",
+                    severity=FindingSeverity.INFO,
+                    proof=raw_output.strip(),
+                    description=f"Netcat successfully established a connection to port {self.scan_port}."
+                )
+                
+                # 3. Add to Database
+                SDB.add_finding(sdb, self.scan_ip, finding)
+                print(f"[{self.TOOL_NAME}] {GREEN}Finding saved to SDB.{RESET}")
+
         elif "connection refused" in raw_output.lower() or "no route to host" in raw_output.lower() or "timeout" in raw_output.lower():
             result_status = f"{YELLOW}Connection FAILED (Port CLOSED/Filtered/Timed out).{RESET}"
         else:
-             # Fallback for unexpected but successful process execution
-             result_status = f"{CYAN}Connectivity test completed. Status unclear from verbose output.{RESET}"
+             result_status = f"{CYAN}Connectivity test completed. Status unclear.{RESET}"
 
         print(f"[{self.TOOL_NAME}] Test finished. Result: {result_status}")
         
-        # Display the verbose output from netcat
         print(f"{DIM}--- Netcat Verbose Output ---{RESET}")
         print(raw_output.strip())
         print(f"{DIM}-----------------------------{RESET}")
@@ -695,7 +679,7 @@ MODULE_REGISTRY: Dict[str, Type[ToolWrapper] | Callable[[Dict[str, Any]], ToolWr
     "port_scan": PortScanningWrapper,
     "osint_gather": OSINTWrapper,
     "hydra": HydraWrapper, 
-    "netcat": NetcatWrapper, # <-- UPDATED
+    "netcat": NetcatWrapper, 
     "metasploit": MetasploitWrapper,
     "burpsuite": BurpSuiteWrapper,
     "wireshark": WiresharkWrapper,
