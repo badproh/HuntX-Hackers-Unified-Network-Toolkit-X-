@@ -28,7 +28,7 @@ import concurrent.futures
 # --- INITIALIZATION ---
 init(autoreset=True)
 
-# --- ANSI COLOR CODES (Safe Definitions) ---
+# --- ANSI COLOR CODES ---
 GREEN = '\033[92m'
 YELLOW = '\033[93m'
 RED = '\033[91m'
@@ -39,7 +39,6 @@ RESET = '\033[0m'
 MAGENTA = '\033[95m'
 
 # --- ASSETS ---
-# Using raw strings (r"") to handle backslashes correctly in ASCII art
 HUNTX_MAP = f"{BOLD}{CYAN}" + r"""
 -----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----
            . _..::__:  ,-"-"._        |7       ,     _,.__
@@ -190,11 +189,20 @@ class PortDetail(SimpleBaseModel):
         super().__init__(port=port, service=service, state=state)
 
 class SDB:
+    # Initialize with empty structure
     data = {"target": "", "assets": {}, "findings": []}
     lock = threading.Lock()
 
     @staticmethod
-    def init(target): SDB.data["target"] = target
+    def init(target): 
+        # FIX: Reset the entire database when a new target is set.
+        # This keeps RAM clean but leaves reports/ files untouched.
+        SDB.data = {
+            "target": target, 
+            "assets": {}, 
+            "findings": []
+        }
+        print(f"{YELLOW}[*] Session memory cleared. New target set to: {target}{RESET}")
     
     @staticmethod
     def update_asset(asset_obj):
@@ -212,8 +220,12 @@ class SDB:
     @staticmethod
     def save():
         if not os.path.exists("reports"): os.makedirs("reports")
+        
         # Ensure target name is safe for filesystem
-        safe_t = re.sub(r'[^a-zA-Z0-9]', '_', SDB.data["target"])
+        target_name = SDB.data["target"] if SDB.data["target"] else "Unknown_Target"
+        safe_t = re.sub(r'[^a-zA-Z0-9]', '_', target_name)
+        
+        # Unique Filename (Timestamp) -> NEVER Deletes Old Files
         fname = f"reports/{safe_t}_{int(time.time())}.json"
         
         # Serialize properly
@@ -281,20 +293,26 @@ class ActiveReconWrapper:
         if gob:
             print(f"{YELLOW}>> Running Gobuster (DNS)...{RESET}")
             try:
+                # Increased timeout to 600s (10 mins) for larger targets
                 cmd = [gob, "dns", "-d", target, "-w", wlist, "-q", "--wildcard"]
-                res = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+                res = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
                 for line in res.stdout.splitlines():
                     if "Found:" in line: found.add(line.split("Found:")[1].strip())
+            except subprocess.TimeoutExpired:
+                print(f"{YELLOW}[WARN] Gobuster timed out (10m limit). Partial results used.{RESET}")
             except Exception as e: print(f"{RED}Gobuster Error: {e}{RESET}")
 
         # FFUF
         if ffuf:
             print(f"{YELLOW}>> Running FFUF (VHost)...{RESET}")
             try:
+                # Increased timeout to 600s
                 cmd = [ffuf, "-u", f"http://{target}", "-w", wlist, "-H", f"Host: FUZZ.{target}", "-mc", "200,302", "-s"]
-                res = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+                res = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
                 for line in res.stdout.splitlines():
                     if line.strip(): found.add(f"{line.strip()}.{target}")
+            except subprocess.TimeoutExpired:
+                print(f"{YELLOW}[WARN] FFUF timed out (10m limit). Partial results used.{RESET}")
             except Exception as e: print(f"{RED}FFUF Error: {e}{RESET}")
 
         print(f"{GREEN}>> Active Recon finished. {len(found)} unique subdomains found.{RESET}")
@@ -306,8 +324,13 @@ class PortScanWrapper:
     def run(self, target):
         print(f"\n{CYAN}[PORT SCAN] Hybrid Strategy Engine...{RESET}")
         
+        # Determine Assets
         hosts = [k for k in SDB.data["assets"].keys()]
-        if not hosts: hosts = [target]
+        if not hosts: 
+            # If no subdomains found, scan the main target
+            hosts = [target]
+            # Ensure the main target is in the database
+            SDB.update_asset(AssetObject(asset_key=target, status="live"))
         
         nmap_path = shutil.which("nmap")
         
@@ -418,7 +441,6 @@ class NetcatWrapper:
         
         try:
             res = subprocess.run([nc, "-z", "-v", "-w", "1", ip, port], capture_output=True, text=True)
-            # Combine stdout and stderr because netcat -v writes to stderr
             out = res.stdout + "\n" + res.stderr
             
             if re.search(r"(succeeded|open|connected)", out, re.IGNORECASE):
@@ -447,7 +469,6 @@ class HydraWrapper:
         cmd = [hydra, "-I", "-l", "root", "-P", pass_list, f"ssh://{target}", "-t", "4", "-f"]
         
         try:
-            # Popen allows us to read output line by line as it happens
             process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
             found = False
             while True:
@@ -526,7 +547,11 @@ def main():
     while True:
         os.system('cls' if os.name == 'nt' else 'clear')
         print(HUNTX_MAP + HUNTX_BANNER)
-        print(f"{BOLD}Target Session: {SDB.data['target'] if SDB.data['target'] else 'None'}{RESET}")
+        
+        # Display current target status
+        target_display = SDB.data['target'] if SDB.data['target'] else f"{DIM}None{RESET}"
+        print(f"{BOLD}Target Session: {target_display}{RESET}")
+        
         print("1. Set Target")
         print("2. Reconnaissance")
         print("3. Vulnerability Tools")
@@ -536,7 +561,9 @@ def main():
         
         c = input(f"\n{GREEN}HuntX > {RESET}").lower()
         
-        if c == '1': SDB.init(input("Enter Target Domain/IP: "))
+        if c == '1': 
+            t = input("Enter Target Domain/IP: ")
+            if t: SDB.init(t)
         elif c == '2':
             if not SDB.data['target']: print(f"{RED}Set target first!{RESET}"); time.sleep(1); continue
             handle_recon_menu(SDB.data['target'])
