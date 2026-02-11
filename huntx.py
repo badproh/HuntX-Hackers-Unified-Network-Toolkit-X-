@@ -87,7 +87,7 @@ HUNTX_CONFIG = {
         "nmap": "cat",
         "nuclei": "echo",
         "hydra": "echo",
-        "netcat": "nc", # Ensure 'nc' or 'ncat' is installed on your system
+        "netcat": "nc", 
         "metasploit": "echo",
         "burpsuite": "echo",
         "wireshark": "echo"
@@ -325,6 +325,7 @@ class ToolWrapper(abc.ABC):
 
     def __init__(self, config: Dict[str, Any]):
         self.config = config
+        # Uses the embedded configuration dictionary
         self.tool_binary_path = config.get('tool_paths', {}).get(self.TOOL_NAME.lower(), self.TOOL_NAME.lower())
         self.direct_target = None 
 
@@ -340,14 +341,20 @@ class ToolWrapper(abc.ABC):
                 return f"External tool launched: {' '.join(command)}"
 
             print(f"[{self.TOOL_NAME}] Executing: {' '.join(command)}")
+            
+            # --- CRITICAL FIX: CAPTURE BOTH STDOUT AND STDERR ---
+            # Netcat verbose output (-v) typically goes to stderr, not stdout.
+            # We merge stderr into stdout so we can regex the result.
             result = subprocess.run(
                 command, capture_output=True, text=True, check=True,
                 timeout=self.config.get('network', {}).get('timeouts', 300)
             )
-            return result.stdout
+            return result.stdout + "\n" + result.stderr 
+            
         except subprocess.CalledProcessError as e:
+            # Netcat may return non-zero if connection fails, but still prints why to stderr
             if self.TOOL_NAME == "NETCAT":
-                return e.stdout + e.stderr
+                return e.stdout + "\n" + e.stderr
             
             print(f"[{self.TOOL_NAME} ERROR] Execution failed: {e.stderr}")
             raise
@@ -612,7 +619,8 @@ class NetcatWrapper(ToolWrapper):
     def _normalize_output(self, raw_output: str, sdb: StateDataBus) -> None:
         """Analyzes the netcat output to report connection status AND SAVE FINDING."""
         
-        success_pattern = r'Connection to .* port .* succeeded'
+        # BROADER REGEX to catch 'succeeded' (Linux) or 'open' (BSD/Mac)
+        success_pattern = r'(succeeded|open|connected)'
         
         # Check if successful
         is_success = re.search(success_pattern, raw_output, re.IGNORECASE) is not None
