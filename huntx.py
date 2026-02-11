@@ -347,7 +347,7 @@ class URLAnalyzer:
     def run(self):
         url = input("Enter URL (e.g. google.com): ").strip()
         if not url.startswith("http"): url = "http://" + url
-        print(f"\n{CYAN}https://en.wikipedia.org/wiki/Analyser Analyzing {url}...{RESET}")
+        print(f"\n{CYAN}Analyzing {url}...{RESET}")
         
         # 1. Headers (Requests)
         try:
@@ -374,9 +374,27 @@ class URLAnalyzer:
             cmd = [bin_path, "-u", url, "-t", "technologies", "-silent"]
             subprocess.run(cmd, check=False)
 
+# --- UTILITIES ---
+
+def gen_password(length=12, complexity=4):
+    """Generates a random password for the utility menu."""
+    chars = string.ascii_letters + string.digits + string.punctuation
+    return ''.join(random.choice(chars) for _ in range(length))
+
+def check_password_strength(password):
+    """Analyzes password strength and returns a colored rating."""
+    score = 0
+    if len(password) >= 8: score += 1
+    if any(c.isdigit() for c in password): score += 1
+    if any(c.isupper() for c in password): score += 1
+    if any(c in string.punctuation for c in password): score += 1
+    
+    if score == 4: return f"{GREEN}Strong{RESET}"
+    elif score >= 2: return f"{YELLOW}Medium{RESET}"
+    return f"{RED}Weak{RESET}"
+
 # --- MENUS ---
 def handle_password_menu():
-    # Helper functions defined earlier
     print(f"\n{BOLD}--- Password Utility ---{RESET}")
     print("1. Generate Password")
     print("2. Check Strength")
