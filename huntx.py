@@ -16,6 +16,12 @@ from datetime import datetime, timezone
 from enum import Enum
 from colorama import init
 
+# --- ADDED IMPORTS FOR UTILITIES ---
+import random 
+import string
+import requests 
+# ------------------------------------------
+
 # Initialize colorama for cross-platform color support
 init(autoreset=True)
 
@@ -27,6 +33,10 @@ CYAN = '\033[96m'
 BOLD = '\033[1m'
 DIM = '\033[2m'
 RESET = '\033[0m'
+
+# --- FIX: ADDED MISSING COLOR VARIABLE ---
+MAGENTA = '\033[95m' 
+
 TERMINAL_WIDTH = 80
 COLUMN_WIDTH = 38
 
@@ -101,6 +111,83 @@ HUNTX_CONFIG = {
         "author": "HUNTX Team"
     }
 }
+
+# --- Password Utility Functions ---
+
+def check_password_strength(password):
+    """Checks the strength of a given password based on 5 criteria."""
+    
+    length_criteria = len(password) >= 8
+    uppercase_criteria = re.search(r'[A-Z]', password) is not None
+    lowercase_criteria = re.search(r'[a-z]', password) is not None
+    number_criteria = re.search(r'[0-9]', password) is not None
+    special_char_criteria = re.search(r'[@$!%*?&]', password) is not None
+
+    criteria_met = sum([
+        length_criteria,
+        uppercase_criteria,
+        lowercase_criteria,
+        number_criteria,
+        special_char_criteria
+    ])
+
+    if criteria_met == 5:
+        strength = "Very Strong"
+    elif criteria_met == 4:
+        strength = "Strong"
+    elif criteria_met == 3:
+        strength = "Moderate"
+    elif criteria_met == 2:
+        strength = "Weak"
+    else:
+        strength = "Very Weak"
+
+    return strength
+
+def generate_complex_password(length, strength_level):
+    """Generates a complex password based on length and a desired strength level."""
+
+    # 1. Define character pools 
+    lower = string.ascii_lowercase
+    upper = string.ascii_uppercase
+    num = string.digits
+    symbols = string.punctuation
+    
+    # 2. Adjust character pools and minimum guarantee based on desired strength
+    
+    all_chars = lower + upper + num + symbols
+
+    if strength_level == 4: # Very Strong
+        all_chars = all_chars + num + symbols 
+        min_guarantee = 4
+    elif strength_level == 3: # Strong
+        all_chars = all_chars + symbols 
+        min_guarantee = 4
+    elif strength_level == 2: # Moderate
+        min_guarantee = 4
+    else: # Weak / Very Weak (Default minimum complexity)
+        min_guarantee = 2 
+
+    # 3. Guarantee character types based on strength
+    guarantee = []
+    guaranteed_types = [lower, upper, num, symbols]
+    
+    for i in range(min(min_guarantee, 4)):
+        guarantee.append(random.choice(guaranteed_types[i]))
+    
+    # 4. Determine and generate the remaining characters
+    remaining_length = length - len(guarantee)
+    
+    if remaining_length < 0:
+        remaining_length = 0
+        
+    remaining_chars = random.choices(all_chars, k=remaining_length)
+    
+    # 5. Combine and shuffle
+    password_list = guarantee + remaining_chars
+    random.shuffle(password_list)
+    
+    return "".join(password_list)
 
 # --- SDB Models and Persistence ---
 
@@ -347,6 +434,81 @@ class SubdomainEnumerationWrapper(ToolWrapper):
 
         print(f"[{self.TOOL_NAME}] Final list of {len(hostnames)} assets processed.")
 
+
+class BruteForceSubdomainWrapper(ToolWrapper): # <-- BRUTEFORCE WRAPPER
+    TOOL_NAME = "BRUTEFORCE_SUB"
+    
+    def __init__(self, config: Dict[str, Any]):
+        super().__init__(config)
+        self.output_file = "discovered_bruteforce_urls.txt"
+        self.wordlist_url = "https://raw.githubusercontent.com/n0kovo/n0kovo_subdomains/main/n0kovo_subdomains_small.txt"
+        self.wordlist_local = "n0kovo_subdomains_small.txt"
+
+    def _download_file(self):
+        if not os.path.isfile(self.wordlist_local):
+            print(f"[{self.TOOL_NAME}] Downloading wordlist from {self.wordlist_url}...")
+            try:
+                # Use requests for download, respecting config timeouts
+                response = requests.get(self.wordlist_url, timeout=self.config.get('network', {}).get('timeouts', 300))
+                response.raise_for_status() 
+                with open(self.wordlist_local, 'wb') as f:
+                    f.write(response.content)
+                print(f"[{self.TOOL_NAME}] Download complete.")
+            except requests.exceptions.RequestException as e:
+                print(f"[{self.TOOL_NAME} ERROR] Failed to download wordlist: {e}. Aborting scan.")
+                raise
+
+    def _build_command(self, target: str, sdb: StateDataBus) -> List[str]:
+        # Command is just a placeholder echo, as the work is done in Python logic
+        try:
+            self._download_file()
+            return ["echo", f"Starting brute-force scan for {target} using local Python logic..."]
+        except Exception:
+            return []
+    
+    def _request_subdomain(self, subdomain: str) -> Optional[requests.Response]:
+        try:
+            # Short timeout for simple connectivity check
+            return requests.get("http://" + subdomain, timeout=3)
+        except requests.exceptions.RequestException:
+            return None 
+
+    def _normalize_output(self, raw_output: str, sdb: StateDataBus) -> None:
+        target_root = sdb.target_root
+        discovered_count = 0
+        
+        if not os.path.isfile(self.wordlist_local):
+            print(f"[{self.TOOL_NAME} ERROR] Wordlist not found. Cannot proceed.")
+            return
+
+        print(f"\n{BOLD}{YELLOW}--- Brute-Force Subdomain Scan for {target_root} ---{RESET}")
+        
+        with open(self.wordlist_local, "r") as wordlist_file, open(self.output_file, "a") as output:
+            for line in wordlist_file:
+                word = line.strip()
+                test_url = word + "." + target_root
+                
+                # Check if asset is already discovered
+                if test_url in sdb.assets and sdb.assets[test_url].status in [AssetStatus.LIVE, AssetStatus.SCANNED]:
+                     continue
+
+                response = self._request_subdomain(test_url)
+                
+                if response is not None and response.status_code < 400:
+                    discovered_url = "http://" + test_url
+                    print(f"{GREEN} [+] {discovered_url} ({response.status_code}){RESET}")
+
+                    # Update SDB
+                    new_asset = AssetObject(asset_key=test_url, url=discovered_url, is_web=True, status=AssetStatus.LIVE)
+                    SDB.update_asset(sdb, new_asset)
+                    
+                    output.write(discovered_url + "\n")
+                    discovered_count += 1
+        
+        print(f"\n[{self.TOOL_NAME}] Finished. {discovered_count} NEW unique assets discovered.")
+        print(f"[{self.TOOL_NAME}] Raw URLs saved to: {self.output_file}")
+
+
 class PortScanningWrapper(ToolWrapper):
     TOOL_NAME = "PORT_SCANNER"
     def _build_command(self, target: str, sdb: StateDataBus) -> List[str]:
@@ -393,19 +555,62 @@ class MetasploitWrapper(ToolWrapper):
 
 class HydraWrapper(ToolWrapper):
     TOOL_NAME = "HYDRA"
+    
     def _build_command(self, target: str, sdb: StateDataBus) -> List[str]:
+        # If target is NONE, try to find an SSH-enabled asset in SDB
         if target == "NONE":
-            ssh_asset = next((a for a in sdb.assets.values() if any(p.service == 'ssh' for p in a.ports)), None)
-            target = ssh_asset.ip_address if ssh_asset else None
+            ssh_asset = next((a for a in sdb.assets.values() if any(p.service == 'ssh' and p.state == 'open' for p in a.ports)), None)
+            target = ssh_asset.asset_key if ssh_asset else None
             
         if not target:
-            print(f"[{self.TOOL_NAME} WARN] No suitable target or asset found in SDB for Hydra.")
+            print(f"[{self.TOOL_NAME} WARN] No suitable target or asset with open SSH (port 22) found in SDB for Hydra.")
             return []
-            
-        return ["echo", f"Hydra started on {target} (Service: ssh) with wordlists..."]
+        
+        # We use the configured wordlist paths (mocked)
+        userlist = self.config.get('wordlists', {}).get('usernames', 'users.txt')
+        passlist = self.config.get('wordlists', {}).get('passwords', 'passwords.txt')
+        
+        # Simulate the actual Hydra command construction
+        self.simulated_command = [
+            "hydra",
+            "-L", userlist,
+            "-P", passlist,
+            target,
+            "ssh"
+        ]
+        
+        return ["echo", f"Simulating SSH Brute-force on {target} using Hydra..."]
 
     def _normalize_output(self, raw_output: str, sdb: StateDataBus) -> None:
-        print(f"[{self.TOOL_NAME}] Brute-force simulation complete. Output: {raw_output.strip()}")
+        print(f"[{self.TOOL_NAME}] Brute-force simulation started. Output: {raw_output.strip()}")
+        
+        target_key = sdb.target_root # Default to root target
+
+        # MOCK SUCCESS SCENARIO: 
+        if random.choice([True, False, False]): # 1 in 3 chance of success for demonstration
+            user = random.choice(["root", "admin", "testuser"])
+            password = random.choice(["password123", "default", "p@ssw0rd"])
+            
+            mock_proof = f"Successful login: {user}:{password}"
+            mock_finding = FindingObject(
+                tool_name=self.TOOL_NAME,
+                template_id="SSH_WEAK_CREDS",
+                name="SSH Weak Credential Found via Brute-Force",
+                severity=FindingSeverity.CRITICAL, # High severity finding
+                proof=mock_proof,
+                description=f"Hydra simulated a successful login to SSH on {target_key} using common or weak credentials."
+            )
+            
+            # Use the target from the command, or the SDB root if target was NONE and no SSH asset was found (less accurate)
+            # For simplicity, if target was NONE, we'll try to use the asset that has port 22 open (if found in _build_command)
+            target_for_finding = self.simulated_command[4] if len(self.simulated_command) > 4 else sdb.target_root
+
+            SDB.add_finding(sdb, target_for_finding, mock_finding)
+            print(f"\n{BOLD}{RED}!! CRITICAL FINDING LOGGED: SSH Weak Credentials ({user}:{password}) !!{RESET}")
+        else:
+            print(f"[{self.TOOL_NAME}] Brute-force simulation finished: No weak credentials found (MOCK).")
+
+# ... (Rest of the wrapper classes remain the same)
 
 class NetcatWrapper(ToolWrapper):
     TOOL_NAME = "NETCAT"
@@ -438,9 +643,10 @@ class WiresharkWrapper(ToolWrapper):
 
 MODULE_REGISTRY: Dict[str, Type[ToolWrapper] | Callable[[Dict[str, Any]], ToolWrapper]] = {
     "subdomain_enum": SubdomainEnumerationWrapper,
+    "bruteforce_sub": BruteForceSubdomainWrapper, 
     "port_scan": PortScanningWrapper,
     "osint_gather": OSINTWrapper,
-    "hydra": HydraWrapper,
+    "hydra": HydraWrapper, # <-- UPDATED
     "netcat": NetcatWrapper,
     "metasploit": MetasploitWrapper,
     "burpsuite": BurpSuiteWrapper,
@@ -448,8 +654,8 @@ MODULE_REGISTRY: Dict[str, Type[ToolWrapper] | Callable[[Dict[str, Any]], ToolWr
     "full_scan": lambda config: ToolWrapper(config)
 }
 
-RECON_PIPELINE: List[str] = ["subdomain_enum", "port_scan", "osint_gather"]
-FULL_SCAN_PIPELINE: List[str] = ["subdomain_enum", "port_scan", "osint_gather", "hydra", "full_scan"]
+RECON_PIPELINE: List[str] = ["subdomain_enum", "bruteforce_sub", "port_scan", "osint_gather"] 
+FULL_SCAN_PIPELINE: List[str] = ["subdomain_enum", "bruteforce_sub", "port_scan", "osint_gather", "hydra", "full_scan"] 
 
 def orchestrator_main(action_code: str, target: str):
     print(f"🧠 Initiating Core Orchestration for action: {action_code} on target: {target}")
@@ -591,32 +797,193 @@ def display_startup_screen():
     print(f"\n{GREEN}--- HuntX Tool Ready ---\n{RESET}")
     time.sleep(1)
 
-# --- NEW MENU FUNCTIONS ---
+# --- MENU FUNCTIONS ---
 
 def display_recon_menu():
     os.system('cls 2>/dev/null' if os.name == 'nt' else 'clear 2>/dev/null')
     print("\n" + "="*5 + f" {BOLD}{GREEN}🗺️ Reconnaissance Sub-Menu {RESET}" + "="*5)
     print("Select a specific action:")
     print("-" * 40)
-    print(f"{BOLD}[1]{RESET}. {CYAN}Subdomain Enumeration (subfinder/host){RESET}")
-    print(f"{BOLD}[2]{RESET}. {CYAN}Port Scanning (nmap mock){RESET}")
-    print(f"{BOLD}[3]{RESET}. {CYAN}OSINT Gathering (osint_gather){RESET}")
-    print(f"{BOLD}[R]{RESET}. {GREEN}Full Recon Pipeline (1+2+3){RESET}")
+    print(f"{BOLD}[1]{RESET}. {CYAN}Passive Subdomain Enumeration (subfinder/host){RESET}")
+    print(f"{BOLD}[2]{RESET}. {CYAN}Active Subdomain Bruteforce (wordlist check){RESET}")
+    print(f"{BOLD}[3]{RESET}. {CYAN}Port Scanning (nmap mock){RESET}")
+    print(f"{BOLD}[4]{RESET}. {CYAN}OSINT Gathering (osint_gather){RESET}")
+    print(f"{BOLD}[R]{RESET}. {GREEN}Full Recon Pipeline (1+2+3+4){RESET}")
     print(f"{BOLD}[B]{RESET}. {YELLOW}Back to Main Menu{RESET}")
     print("-" * 40)
 
 def display_other_tools_menu():
     os.system('cls 2>/dev/null' if os.name == 'nt' else 'clear 2>/dev/null')
-    print("\n" + "="*5 + f" {BOLD}{RED}🔧 Other Bug Hunting Tools {RESET}" + "="*5)
+    print("\n" + "="*5 + f" {BOLD}{RED}🔧 Vulnerability & Exploitation Tools {RESET}" + "="*5)
     print("Select a tool to launch directly:")
     print("-" * 40)
-    print(f"{BOLD}[1]{RESET}. {CYAN}hydra{RESET} (Brute-Force, requires target)")
-    print(f"{BOLD}[2]{RESET}. {CYAN}netcat{RESET} (Network Utility, requires IP:PORT)")
-    print(f"{BOLD}[3]{RESET}. {CYAN}metasploit{RESET} (Exploitation, requires target)")
-    print(f"{BOLD}[4]{RESET}. {CYAN}burpsuite{RESET} (GUI Proxy Launch)")
-    print(f"{BOLD}[5]{RESET}. {CYAN}wireshark{RESET} (GUI Sniffer Launch)")
+    print(f"{BOLD}[1]{RESET}. {RED}SSH Brute-Force (Hydra Mock){RESET}") # <-- NEW ITEM
+    print(f"{BOLD}[2]{RESET}. {CYAN}Other Brute-Force (Hydra, requires manual target){RESET}")
+    print(f"{BOLD}[3]{RESET}. {CYAN}Network Utility (Netcat, requires IP:PORT){RESET}")
+    print(f"{BOLD}[4]{RESET}. {CYAN}Exploitation (Metasploit, requires target){RESET}")
+    print(f"{BOLD}[5]{RESET}. {CYAN}GUI Proxy (BurpSuite Launch){RESET}")
+    print(f"{BOLD}[6]{RESET}. {CYAN}GUI Sniffer (Wireshark Launch){RESET}")
     print(f"{BOLD}[B]{RESET}. {YELLOW}Back to Main Menu{RESET}")
     print("-" * 40)
+
+def handle_other_tools_menu():
+    while True:
+        display_other_tools_menu()
+        choice = input(f"{RED}Enter your choice: {RESET}").strip().lower()
+        if choice == 'b': return
+
+        tool_map = {
+            '1': 'hydra', # SSH Brute-Force
+            '2': 'hydra', # Generic Hydra
+            '3': 'netcat',
+            '4': 'metasploit',
+            '5': 'burpsuite',
+            '6': 'wireshark'
+        }
+        
+        if choice in tool_map:
+            tool_name = tool_map[choice]
+            
+            if choice == '1': # SSH Brute-Force (option 1)
+                 # Target can be NONE, letting HydraWrapper try to find an SSH asset from SDB
+                 target = "NONE"
+                 print(f"{YELLOW}Attempting to automatically find SSH target from scanned assets...{RESET}")
+            elif tool_name in ['hydra', 'netcat', 'metasploit']:
+                 # Other tools require a manual target
+                 target = input(f"{RED}Enter the {BOLD}target/asset{RESET} (e.g., example.com or IP:PORT): {RESET}").strip()
+                 if not target: print(f"{YELLOW}[ERROR] Target required for {tool_name}.{RESET}"); time.sleep(1); continue
+            else:
+                 target = "NONE" # GUI tools don't need a specific in-app target passed
+
+            orchestrator_main(tool_name, target)
+        else:
+            print(f"\n{YELLOW}[INVALID INPUT] Invalid choice.{RESET}")
+            time.sleep(1)
+
+
+# --- NEW HANDLER FOR DOMAIN/URL ANALYZER ---
+def analyze_url_with_tools(target: str):
+    """Mocks API calls to VirusTotal and other services."""
+    print(f"\n{BOLD}{CYAN}--- Threat Intelligence Analysis for {target} ---{RESET}")
+    
+    # Simple Mock Logic for demonstration
+    if "malicious" in target or "badsite" in target or "phish" in target:
+        vt_score = (5, 90)
+        phishing = True
+    elif "example.com" in target or "google.com" in target:
+        vt_score = (0, 90)
+        phishing = False
+    else:
+        vt_score = (random.randint(0, 3), 90)
+        phishing = random.choice([True, False])
+
+    print(f"{BOLD}1. VirusTotal Score (MOCK):{RESET}")
+    if vt_score[0] > 0:
+        print(f"   {RED}🚨 Detections: {vt_score[0]}/{vt_score[1]} engines flagged this URL.{RESET}")
+        print(f"   {DIM}   (Simulating flags from tools like Google Safe Browsing, etc.){RESET}")
+    else:
+        print(f"   {GREEN}✅ Detections: 0/{vt_score[1]} engines flagged this URL. (Clean){RESET}")
+
+    print(f"\n{BOLD}2. Phishing/Spam Check (MOCK):{RESET}")
+    if phishing:
+        print(f"   {RED}⚠️ Warning: Potential Phishing/Spam indicators detected.{RESET}")
+    else:
+        print(f"   {GREEN}✅ No immediate spam/phishing flags found.{RESET}")
+        
+    print(f"\n{BOLD}3. Passive DNS (MOCK):{RESET}")
+    print(f"   {CYAN}Associated IPs:{RESET} 192.168.1.1, 104.26.12.34 (and {random.randint(3, 10)} others)")
+
+def handle_url_analyzer():
+    os.system('cls 2>/dev/null' if os.name == 'nt' else 'clear 2>/dev/null')
+    print("\n" + "="*5 + f" {BOLD}{MAGENTA}🔍 Domain/URL Analyzer {RESET}" + "="*5) # Used MAGENTA here
+    print("This utility simulates checking a URL against threat intelligence databases (like VirusTotal).")
+    print("-" * 40)
+    
+    target = input(f"{GREEN}Enter the Domain or URL to analyze (e.g., evil.com): {RESET}").strip()
+
+    if not target:
+        print(f"{YELLOW}[ERROR] Target cannot be empty.{RESET}"); time.sleep(1); return
+    
+    analyze_url_with_tools(target)
+        
+    try: input(f"\n{YELLOW}{BOLD}Press ENTER to return to the main menu...{RESET}")
+    except: pass
+# ---------------------------------------------
+
+
+# --- HANDLER FOR PASSWORD UTILITY ---
+def handle_password_utility():
+    os.system('cls 2>/dev/null' if os.name == 'nt' else 'clear 2>/dev/null')
+    print("\n" + "="*5 + f" {BOLD}{GREEN}🔒 Password Utility {RESET}" + "="*5)
+    print("Select an option:")
+    print("-" * 40)
+    print(f"{BOLD}[1]{RESET}. {CYAN}Generate a Complex Password{RESET}")
+    print(f"{BOLD}[2]{RESET}. {CYAN}Check Strength of a Password{RESET}")
+    print(f"{BOLD}[B]{RESET}. {YELLOW}Back to Main Menu{RESET}")
+    print("-" * 40)
+    
+    choice = input(f"{GREEN}Enter your choice: {RESET}").strip().lower()
+
+    if choice == 'b':
+        return
+    elif choice == '1':
+        print(f"\n{BOLD}>> PASSWORD GENERATOR <<{RESET}")
+        
+        # --- STRENGTH PROMPT ---
+        print("\nDesired Strength:")
+        print(f"  {BOLD}[4]{RESET}. {RED}Very Strong (Min length 8, Max Complexity){RESET}")
+        print(f"  {BOLD}[3]{RESET}. {YELLOW}Strong (Min length 8, High Complexity){RESET}")
+        print(f"  {BOLD}[2]{RESET}. {GREEN}Moderate (Min length 6, Medium Complexity){RESET}")
+        print(f"{BOLD}[1]{RESET}. {DIM}Weak (Min length 4, Basic Complexity){RESET}")
+        
+        try:
+            strength_choice = int(input(f"{GREEN}Enter Strength Level (1-4): {RESET}"))
+            if strength_choice not in [1, 2, 3, 4]: raise ValueError
+        except ValueError:
+            print(f"{RED}Invalid strength choice. Defaulting to Moderate (2).{RESET}")
+            strength_choice = 2
+
+        min_len = 8 if strength_choice >= 3 else 6 if strength_choice == 2 else 4
+        
+        try:
+            length = int(input(f"{GREEN}ENTER THE LENGTH THAT U WANT (min {min_len}): {RESET}"))
+        except ValueError:
+            print(f"{RED}Invalid length input. Defaulting to {min_len}.{RESET}"); length = min_len
+
+        # Enforce minimum length based on strength choice
+        if length < min_len:
+            print(f"{YELLOW}Length is too low for this strength. Using minimum length {min_len}.{RESET}"); length = min_len
+        
+        # -----------------------------
+
+        # Generate and check the password
+        complex_pass = generate_complex_password(length, strength_choice)
+        strength_rating = check_password_strength(complex_pass)
+
+        print("\n--- RESULTS ---")
+        print(f"Generated Password: {BOLD}{complex_pass}{RESET}")
+        print(f"Password Length: {len(complex_pass)}")
+        print(f"Password Strength Rating: {BOLD}{strength_rating}{RESET}")
+    
+    elif choice == '2':
+        print(f"\n{BOLD}>> STRENGTH CHECKER <<{RESET}")
+        password = input(f"{GREEN}Enter a password to check its strength: {RESET}")
+        if not password: 
+            print(f"{YELLOW}Password cannot be empty.{RESET}"); time.sleep(1); 
+            handle_password_utility()
+            return
+        
+        strength = check_password_strength(password)
+        print(f"\nPassword Strength: {BOLD}{strength}{RESET}")
+    else:
+        print(f"\n{YELLOW}[INVALID INPUT] Invalid choice.{RESET}"); time.sleep(1); 
+        handle_password_utility()
+        return
+        
+    try: input(f"\n{YELLOW}{BOLD}Press ENTER to return to the password menu...{RESET}")
+    except: pass
+    handle_password_utility() # Loop back to the utility menu
+# ---------------------------------------------
 
 
 def handle_recon_menu():
@@ -630,8 +997,9 @@ def handle_recon_menu():
 
         action_map = {
             '1': 'subdomain_enum',
-            '2': 'port_scan',
-            '3': 'osint_gather',
+            '2': 'bruteforce_sub',
+            '3': 'port_scan',
+            '4': 'osint_gather',
             'r': 'RECON_FULL'
         }
         
@@ -648,21 +1016,27 @@ def handle_other_tools_menu():
         if choice == 'b': return
 
         tool_map = {
-            '1': 'hydra',
-            '2': 'netcat',
-            '3': 'metasploit',
-            '4': 'burpsuite',
-            '5': 'wireshark'
+            '1': 'hydra', # SSH Brute-Force
+            '2': 'hydra', # Generic Hydra
+            '3': 'netcat',
+            '4': 'metasploit',
+            '5': 'burpsuite',
+            '6': 'wireshark'
         }
         
         if choice in tool_map:
             tool_name = tool_map[choice]
             
-            if tool_name in ['hydra', 'netcat', 'metasploit']:
-                 target = input(f"{RED}Enter the {BOLD}target/asset{RESET} (e.g., example.com:22): {RESET}").strip()
+            if choice == '1': # SSH Brute-Force (option 1)
+                 # Target can be NONE, letting HydraWrapper try to find an SSH asset from SDB
+                 target = "NONE"
+                 print(f"{YELLOW}Attempting to automatically find SSH target from scanned assets...{RESET}")
+            elif tool_name in ['hydra', 'netcat', 'metasploit']:
+                 # Other tools require a manual target
+                 target = input(f"{RED}Enter the {BOLD}target/asset{RESET} (e.g., example.com or IP:PORT): {RESET}").strip()
                  if not target: print(f"{YELLOW}[ERROR] Target required for {tool_name}.{RESET}"); time.sleep(1); continue
             else:
-                 target = "NONE"
+                 target = "NONE" # GUI tools don't need a specific in-app target passed
 
             orchestrator_main(tool_name, target)
         else:
@@ -678,7 +1052,9 @@ def display_menu():
     print(f"{BOLD}[1]{RESET}. {CYAN}Reconnaissance{RESET} (Subdomain, OSINT, Port Scan)")
     print(f"{BOLD}[2]{RESET}. {RED}Vulnerability & Exploitation{RESET} (Full Scan, Launch Tools)")
     print(f"{BOLD}[3]{RESET}. {GREEN}Generate Security Report{RESET}")
-    print(f"{BOLD}[4]{RESET}. {YELLOW}Exit Tool{RESET}")
+    print(f"{BOLD}[4]{RESET}. {CYAN}Password Generator / Checker{RESET}")
+    print(f"{BOLD}[5]{RESET}. {MAGENTA}Domain/URL Analyzer (VirusTotal Mock){RESET}")
+    print(f"{BOLD}[6]{RESET}. {YELLOW}Exit Tool{RESET}")
     print("-" * 40)
 
 def main():
@@ -687,11 +1063,12 @@ def main():
     while True:
         display_menu()
         try:
-            choice = input(f"{GREEN}Enter your choice (1-4): {RESET}").strip()
+            # Update prompt range to 1-6
+            choice = input(f"{GREEN}Enter your choice (1-6): {RESET}").strip()
         except KeyboardInterrupt:
-            choice = '4'
+            choice = '6'
 
-        if choice == '4':
+        if choice == '6':
             print(f"\n{YELLOW}👋 Exiting HuntX. Stay secure!{RESET}")
             sys.exit(0)
         elif choice == '1':
@@ -701,8 +1078,12 @@ def main():
         elif choice == '3':
             target = input(f"{GREEN}Enter Session ID (or leave blank for new session): {RESET}").strip() or "DEFAULT_SESSION"
             orchestrator_main('REPORT', target)
+        elif choice == '4':
+            handle_password_utility()
+        elif choice == '5': # <-- NEW HANDLER CALL
+            handle_url_analyzer()
         else:
-            print(f"\n{YELLOW}[INVALID INPUT] Please enter a number between 1 and 4.{RESET}"); time.sleep(0.5)
+            print(f"\n{YELLOW}[INVALID INPUT] Please enter a number between 1 and 6.{RESET}"); time.sleep(0.5)
 
 if __name__ == "__main__":
     main()
