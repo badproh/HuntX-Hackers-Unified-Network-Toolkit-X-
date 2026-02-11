@@ -36,16 +36,16 @@ chmod +x install.sh
 sudo ./install.sh
 
 
-Manual Installation
-If you prefer to install dependencies manually or are not using a Debian-based system:
+### Manual Installation (Optional)
+If you prefer not to use the installer script, you can set up the environment manually:
 
-Bash
-# 1. Install System Dependencies (Kali/Debian/Ubuntu)
-sudo apt update
-sudo apt install nmap hydra wafw00f wireshark-common -y
+```bash
+# 1. Install System Dependencies (Kali/Debian):
+   sudo apt update
+   sudo apt install nmap hydra wafw00f wireshark-common
 
-# 2. Install Python Dependencies
-pip3 install -r requirements.txt
-
-# 3. Run HuntX
-python3 huntx.py
+# 2. Install Python Dependencies:
+   pip3 install -r requirements.txt
+   
+# 3.Run HuntX:
+   python3 huntx.py
